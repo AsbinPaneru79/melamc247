@@ -2,28 +2,40 @@ const mineflayer = require('mineflayer');
 const http = require('http');
 
 // Configuration
-// If 'SoNar' is a local server name, replace with the exact IP/domain (e.g. 'sonar.example.com')
+// melamc.playmc.world uses an SRV record pointing directly to eu1.freegamehost.xyz:28430
 const CONFIG = {
-  host: process.env.MC_HOST || 'SoNar',
-  port: parseInt(process.env.MC_PORT, 10) || 25565,
-  username: process.env.MC_USERNAME || 'tynorix',
+  host: process.env.MC_HOST || 'eu1.freegamehost.xyz',
+  port: parseInt(process.env.MC_PORT, 10) || 28430,
+  username: process.env.MC_USERNAME || 'SoNar',
   passwordCommand: '/login tynorix$',
-  version: '1.8.9',
+  version: process.env.MC_VERSION || '1.8.9',
   webPort: process.env.PORT || 3000,
   reconnectDelay: 10000 // 10 seconds before attempting reconnect
 };
 
-// 1. Lightweight Web Server (Required by Render & UptimeRobot)
+// 1. Lightweight Web Server (Required by Railway, Render, and UptimeRobot)
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end(`Minecraft AFK Bot is alive. Target: ${CONFIG.host}:${CONFIG.port}\n`);
+  res.end(`Minecraft AFK Bot is alive. Connected to ${CONFIG.host}:${CONFIG.port}\n`);
 });
 
-server.listen(CONFIG.webPort, () => {
-  console.log(`[Web] HTTP server listening on port ${CONFIG.webPort} for UptimeRobot pings.`);
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    const nextPort = Number(CONFIG.webPort) + 1;
+    console.warn(`[Web] Port ${CONFIG.webPort} is in use, attempting port ${nextPort}...`);
+    CONFIG.webPort = nextPort;
+    server.listen(CONFIG.webPort, '0.0.0.0');
+  } else {
+    console.error('[Web] Server error:', err.message);
+  }
 });
 
-// 2. Bot Management & Anti-AFK Logic
+// Explicitly bind to '0.0.0.0' for Railway / Render container health checks
+server.listen(CONFIG.webPort, '0.0.0.0', () => {
+  console.log(`[Web] HTTP health check listening on 0.0.0.0:${CONFIG.webPort} for Railway/Render.`);
+});
+
+// 2. Anti-AFK Movement & Bot Logic
 let bot = null;
 let movementTimeout = null;
 let isReconnecting = false;
@@ -40,67 +52,101 @@ function stopMovement() {
 
 function startAntiAfkLoop() {
   stopMovement();
+  console.log('[Anti-AFK] Initializing anti-cheat friendly routine (7 blocks forward <-> 7 blocks back)...');
 
-  // Minecraft standard walk speed is ~4.3 blocks/s.
-  // 2300ms of walking covers ~10 blocks.
-  const MOVE_DURATION_MS = 2300;
-  const PAUSE_DURATION_MS = 500;
+  // Walking forward/backward generates standard vanilla packets that avoid anti-cheat flags
+  const MOVE_TIME_MS = 1650; // ~7 blocks at normal walking speed (~4.3 blocks/s)
+  const PAUSE_TIME_MS = 1000;
 
-  function moveLeft() {
+  function stepForward() {
     if (!bot || !bot.entity) return;
-    bot.setControlState('left', true);
-    bot.setControlState('right', false);
+    const startX = bot.entity.position.x;
+    const startZ = bot.entity.position.z;
+    console.log(`[Anti-AFK] Walking FORWARD 7 blocks... (Current Pos: X=${startX.toFixed(1)}, Z=${startZ.toFixed(1)})`);
+
+    bot.swingArm();
+    bot.setControlState('back', false);
+    bot.setControlState('forward', true);
 
     movementTimeout = setTimeout(() => {
       if (!bot) return;
-      bot.setControlState('left', false);
+      bot.setControlState('forward', false);
 
-      movementTimeout = setTimeout(moveRight, PAUSE_DURATION_MS);
-    }, MOVE_DURATION_MS);
+      const dx = bot.entity.position.x - startX;
+      const dz = bot.entity.position.z - startZ;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      console.log(`[Anti-AFK] Completed forward movement (${dist.toFixed(1)} blocks traveled). Pausing...`);
+
+      movementTimeout = setTimeout(stepBack, PAUSE_TIME_MS);
+    }, MOVE_TIME_MS);
   }
 
-  function moveRight() {
+  function stepBack() {
     if (!bot || !bot.entity) return;
-    bot.setControlState('right', true);
-    bot.setControlState('left', false);
+    const startX = bot.entity.position.x;
+    const startZ = bot.entity.position.z;
+    console.log(`[Anti-AFK] Walking BACKWARD 7 blocks... (Current Pos: X=${startX.toFixed(1)}, Z=${startZ.toFixed(1)})`);
+
+    bot.swingArm();
+    bot.setControlState('forward', false);
+    bot.setControlState('back', true);
 
     movementTimeout = setTimeout(() => {
       if (!bot) return;
-      bot.setControlState('right', false);
+      bot.setControlState('back', false);
 
-      movementTimeout = setTimeout(moveLeft, PAUSE_DURATION_MS);
-    }, MOVE_DURATION_MS);
+      const dx = bot.entity.position.x - startX;
+      const dz = bot.entity.position.z - startZ;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      console.log(`[Anti-AFK] Returned to start position (${dist.toFixed(1)} blocks traveled). Pausing...`);
+
+      movementTimeout = setTimeout(stepForward, PAUSE_TIME_MS);
+    }, MOVE_TIME_MS);
   }
 
-  // Initial delay before starting movement
-  movementTimeout = setTimeout(moveLeft, 2000);
+  // Start after an initial pause
+  movementTimeout = setTimeout(stepForward, PAUSE_TIME_MS);
 }
 
 function initBot() {
   isReconnecting = false;
-  console.log(`[Bot] Connecting to ${CONFIG.host}:${CONFIG.port} with version ${CONFIG.version}...`);
+
+  // Resolve hostname if alias is given
+  let targetHost = CONFIG.host;
+  let targetPort = CONFIG.port;
+  if (targetHost === 'melamc.playmc.world') {
+    targetHost = 'eu1.freegamehost.xyz';
+    targetPort = 28430;
+  }
+
+  console.log(`[Bot] Connecting to ${targetHost}:${targetPort} as ${CONFIG.username} (Version: ${CONFIG.version})...`);
 
   bot = mineflayer.createBot({
-    host: CONFIG.host,
-    port: CONFIG.port,
+    host: targetHost,
+    port: targetPort,
     username: CONFIG.username,
     version: CONFIG.version,
-    checkTimeoutInterval: 30000
+    auth: 'offline', // Offline mode authentication
+    checkTimeoutInterval: 60000
   });
 
   bot.once('spawn', () => {
     console.log('[Bot] Successfully spawned in world.');
 
-    // Wait 1.5 seconds after spawn to send the login command
+    // 1. Wait 1.5 seconds after spawn to send the login command
     setTimeout(() => {
-      if (bot) {
-        console.log(`[Bot] Executing login command: ${CONFIG.passwordCommand}`);
-        bot.chat(CONFIG.passwordCommand);
-      }
-    }, 1500);
+      if (!bot) return;
+      console.log(`[Bot] Executing login command: ${CONFIG.passwordCommand}`);
+      bot.chat(CONFIG.passwordCommand);
 
-    // Start 10-block left/right continuous movement loop
-    startAntiAfkLoop();
+      // 2. Wait 3.5 seconds after sending /login for authentication & teleport unfreeze
+      console.log('[Bot] Waiting for server authentication and spawn unfreeze...');
+      setTimeout(() => {
+        if (!bot) return;
+        console.log('[Bot] Authentication complete. Starting 7-block anti-AFK movement!');
+        startAntiAfkLoop();
+      }, 3500);
+    }, 1500);
   });
 
   // Log incoming chat messages
@@ -140,5 +186,5 @@ function scheduleReconnect() {
   }, CONFIG.reconnectDelay);
 }
 
-// Start the bot initially
+// Start the bot
 initBot();

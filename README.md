@@ -1,9 +1,9 @@
 # Minecraft AFK Bot (Mineflayer 1.8.9)
 
 A Minecraft AFK bot created with Mineflayer that:
-- Connects to server `SoNar` (or configured host) with version `1.8.9`.
-- Sends `/login tynorix$` upon spawning.
-- Moves continuously 10 blocks left and 10 blocks right to prevent AFK kicks.
+- Connects to server `melamc.playmc.world` with username `SoNar` on version `1.8.9`.
+- Sends `/login tynorix$` upon entering the server.
+- Moves continuously 7 blocks left and 7 blocks right to prevent AFK kicks.
 - Automatically reconnects if kicked or disconnected.
 - Runs a lightweight HTTP server on port `PORT` so it can be hosted on Render and kept alive via UptimeRobot.
 
