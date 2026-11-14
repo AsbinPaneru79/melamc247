@@ -1,0 +1,15 @@
+{
+  "name": "minecraft-afk-bot",
+  "version": "1.0.0",
+  "description": "Minecraft AFK bot with auto-reconnect, anti-AFK movement, and Render keep-alive",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "mineflayer": "^4.20.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
